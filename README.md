@@ -1,95 +1,100 @@
 # Hermes Dashboard
 
-Browser-based dashboard for managing Hermes Agent — providers, models, sessions, cron jobs, skills, and more.
+Browser-based dashboard for managing Hermes Agent — providers, models, sessions, cron jobs, skills, config, and more.
 
-A standalone web UI that connects to a running Hermes Agent backend API.
+**One command to set up, one command to run.**
 
-## Features
-
-- **Models & Providers** — Browse, search, and switch models. Add API keys inline via the Model Picker dialog (with auto-fill base URL and model auto-fetch).
-- **Sessions** — Monitor active and past agent sessions with full transcript viewer.
-- **Cron Jobs** — Create, edit, pause, and monitor scheduled tasks.
-- **Skills** — Browse and manage installed skills.
-- **Config** — View and edit Hermes Agent configuration via a schema-driven editor.
-- **Environment** — Manage API keys and environment variables.
-- **Logs** — Live tail and filtered log viewer.
-- **Analytics** — Dashboard with usage statistics.
-- **Plugins** — Installed plugins management.
-- **i18n** — English and Chinese (简体中文) support.
-
-## Stack
-
-- **Vite 7** + **React 19** + **TypeScript 5**
-- **Tailwind CSS v4** with dark theme
-- **shadcn/ui**-style components (hand-rolled, no CLI dependency)
-- **React Router v7**
-- **Lucide** icons
-
-## Getting Started
-
-### Prerequisites
-
-- [Hermes Agent](https://hermes-agent.nousresearch.com) installed and running
-- Node.js 18+
-
-### Backend Patches Required
-
-> **重要：** 前端 SPA 的"添加 API Key"等增强功能需要给 Hermes Agent 后端打补丁。
-> 详见 [`backend/`](./backend/) 目录中的补丁文件和说明。
-
-### Setup
+## Quick Start
 
 ```bash
-# Clone the repo
+# Clone
 git clone https://github.com/Mxxmax/hermes-dashboard.git
 cd hermes-dashboard
 
-# Install dependencies
+# One-command setup (installs Python deps, patches backend, builds frontend)
+./setup.sh
+
+# Start
+./start.sh
+```
+
+Open http://localhost:9119 in your browser.
+
+> **Prerequisites:** Python 3.10+, Node.js 18+, npm
+
+## What's Included
+
+This repo contains both the **frontend** and **backend** code:
+
+| Layer | Directory | Description |
+|-------|-----------|-------------|
+| Frontend | `src/` | React 19 + Vite 7 + TypeScript SPA |
+| Backend patches | `backend/hermes_cli/` | Modified `web_server.py` with new API endpoints |
+| Backend patches | `backend/tui_gateway/` | Modified `server.py` with improved provider listing |
+| Setup script | `setup.sh` | Auto-installs everything |
+
+### Enhanced Features
+
+- **Inline Add API Key** — Configure providers directly from the Model Picker dialog
+- **Auto-fetch Models** — Enter a base URL and fetch available models automatically
+- **Custom Providers** — Add any OpenAI-compatible endpoint
+- **Only Configured Providers** — Unconfigured providers are hidden (no clutter)
+
+## Manual Setup
+
+If you prefer to do things manually:
+
+```bash
+# 1. Install Python dependencies
+pip install hermes-agent uvicorn
+
+# 2. Apply backend patches
+cp backend/hermes_cli/web_server.py $(python3 -c "import hermes_cli; from pathlib import Path; print(Path(hermes_cli.__file__).parent.parent)")/hermes_cli/web_server.py
+
+# 3. Install and build frontend
 npm install
-
-# Start the Vite dev server (HMR + API proxy to Hermes backend)
-npm run dev
-```
-
-Make sure Hermes Agent's dashboard backend is running on port 9119:
-
-```bash
-hermes dashboard
-```
-
-The Vite dev server proxies `/api` requests to `http://127.0.0.1:9119` by default. Set `HERMES_DASHBOARD_URL` to use a different backend address.
-
-### Production Build
-
-```bash
 npm run build
-```
 
-Output goes to `dist/`.
+# 4. Start the server
+python3 -m backend.run
+```
 
 ## Development
 
 ```bash
-npm run dev     # Start dev server with HMR
-npm run build   # Production build
-npm run lint    # ESLint check
-npm run preview # Preview production build
+# Start the backend
+python3 -m backend.run
+
+# In another terminal, start Vite dev server (with HMR)
+npm run dev
 ```
+
+The Vite dev server proxies `/api` requests to `http://127.0.0.1:9119`.
 
 ## Project Structure
 
 ```
-src/
-├── components/      # Reusable UI components
-│   └── ui/          # Primitives (Card, Input, Separator, etc.)
-├── contexts/        # React contexts (page header, system actions)
-├── hooks/           # Custom React hooks
-├── i18n/            # Internationalization (en, zh)
-├── lib/             # API client, utils, gateway client
-├── pages/           # Page components (Models, Sessions, Config, etc.)
-├── plugins/         # Dashboard plugin system
-└── themes/          # Theme system (presets, types)
+hermes-dashboard/
+├── setup.sh                # One-click setup (recommended)
+├── start.sh                # One-click start
+├── backend/
+│   ├── hermes_cli/         # Patched web_server.py with new API endpoints
+│   ├── tui_gateway/        # Patched server.py with improved provider listing
+│   ├── requirements.txt    # Python dependencies
+│   └── run.py              # Server entry point
+├── src/                    # React 19 + TypeScript frontend
+├── package.json
+├── vite.config.ts
+└── README.md
 ```
+
+## Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HERMES_HOST` | `127.0.0.1` | Server bind address |
+| `HERMES_PORT` | `9119` | Server port |
+| `HERMES_LOG_LEVEL` | `info` | Logging level |
 
 ## License
 

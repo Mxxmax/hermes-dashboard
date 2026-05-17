@@ -1,0 +1,2 @@
+hermes-agent>=0.13.0
+uvicorn>=0.27.0
