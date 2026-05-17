@@ -1,0 +1,235 @@
+diff --git a/hermes_cli/web_server.py b/hermes_cli/web_server.py
+index c46477872..706c268b5 100644
+--- a/hermes_cli/web_server.py
++++ b/hermes_cli/web_server.py
+@@ -106,6 +106,8 @@ _PUBLIC_API_PATHS: frozenset = frozenset({
+     "/api/model/info",
+     "/api/dashboard/themes",
+     "/api/dashboard/plugins",
++    "/api/model/provider/configure",
++    "/api/model/fetch-models",
+     "/api/dashboard/plugins/rescan",
+ })
+ 
+@@ -446,6 +448,21 @@ class EnvVarReveal(BaseModel):
+     key: str
+ 
+ 
++class ProviderConfigureBody(BaseModel):
++    """Payload for POST /api/model/provider/configure — configure a provider."""
++    provider_slug: str
++    api_key: str
++    base_url: str = ""
++    default_model: str = ""
++    is_custom: bool = False
++
++
++class FetchModelsBody(BaseModel):
++    """Payload for POST /api/model/fetch-models — list models from a provider API."""
++    base_url: str
++    api_key: str = ""
++
++
+ class ModelAssignment(BaseModel):
+     """Payload for POST /api/model/set — assign a provider/model to a slot.
+ 
+@@ -1008,16 +1025,199 @@ def get_model_options():
+             custom_providers=custom_providers,
+             max_models=50,
+         )
++
++        # Build the full canonical provider list for the "Add API Key" dropdown
++        try:
++            from hermes_cli.auth import PROVIDER_REGISTRY
++            from hermes_cli.models import CANONICAL_PROVIDERS, _PROVIDER_LABELS
++            authed_slugs = {p["slug"].lower() for p in providers if isinstance(p, dict)}
++            all_canonical = []
++            for entry in CANONICAL_PROVIDERS:
++                pconfig = PROVIDER_REGISTRY.get(entry.slug)
++                auth_type = pconfig.auth_type if pconfig else "api_key"
++                key_env = (
++                    pconfig.api_key_env_vars[0]
++                    if (pconfig and pconfig.api_key_env_vars)
++                    else ""
++                )
++                all_canonical.append({
++                    "slug": entry.slug,
++                    "name": _PROVIDER_LABELS.get(entry.slug, entry.label),
++                    "auth_type": auth_type,
++                    "key_env": key_env,
++                    "default_base_url": pconfig.inference_base_url if pconfig else "",
++                    "base_url_env_var": pconfig.base_url_env_var if pconfig else "",
++                    "has_key": entry.slug.lower() in authed_slugs,
++                })
++        except Exception:
++            all_canonical = []
++
+         return {
+             "providers": providers,
+             "model": current_model,
+             "provider": current_provider,
++            "all_canonical": all_canonical,
+         }
+     except Exception:
+         _log.exception("GET /api/model/options failed")
+         raise HTTPException(status_code=500, detail="Failed to list model options")
+ 
+ 
++@app.post("/api/model/provider/configure")
++def configure_provider(body: ProviderConfigureBody):
++    """Save an API key for a provider and make it immediately available.
++
++    Looks up the provider slug in PROVIDER_REGISTRY or models.dev to find
++    the correct env var name, saves the key to ~/.hermes/.env, and refreshes
++    the running environment so the provider appears in the picker instantly.
++    """
++    try:
++        # Normalize slug
++        slug = body.provider_slug.strip().lower()
++
++        # --- Custom provider path ---
++        if body.is_custom:
++            if not body.base_url:
++                raise HTTPException(
++                    status_code=400,
++                    detail="Base URL is required for custom providers.",
++                )
++            # Save to config.yaml custom_providers
++            cfg = load_config()
++            custom_list = cfg.get("custom_providers")
++            if not isinstance(custom_list, list):
++                custom_list = []
++            # Replace existing entry with same name, or append
++            existing = None
++            for i, cp in enumerate(custom_list):
++                if isinstance(cp, dict) and cp.get("name", "").lower() == slug:
++                    existing = i
++                    break
++            entry = {
++                "name": slug,
++                "base_url": body.base_url,
++                "api_key": body.api_key,
++            }
++            if body.default_model:
++                entry["model"] = body.default_model
++            if existing is not None:
++                custom_list[existing] = entry
++            else:
++                custom_list.append(entry)
++            cfg["custom_providers"] = custom_list
++            save_config(cfg)
++            # Also set env var for current session
++            os.environ[slug.upper() + "_API_KEY"] = body.api_key
++            return {
++                "ok": True,
++                "provider_slug": slug,
++                "provider_name": slug,
++                "env_var": "custom_providers",
++            }
++
++        # --- Standard provider path ---
++        from hermes_cli.auth import PROVIDER_REGISTRY
++        pconfig = PROVIDER_REGISTRY.get(slug)
++
++        env_var = None
++        if pconfig and pconfig.api_key_env_vars:
++            # Use the primary (first) env var
++            env_var = pconfig.api_key_env_vars[0]
++
++        # Fallback: derive env var from slug conventions
++        base_url_env_var = pconfig.base_url_env_var if pconfig else ""
++
++        if not env_var:
++            _SLUG_TO_ENV = {
++                "nous": "NOUS_API_KEY",
++                "openrouter": "OPENROUTER_API_KEY",
++                "xiaomi": "XIAOMI_API_KEY",
++                "huggingface": "HF_TOKEN",
++                "ollama-cloud": "OLLAMA_CLOUD_API_KEY",
++                "bedrock": None,  # AWS SDK — no single env var
++                "azure-foundry": "AZURE_FOUNDRY_API_KEY",
++                "tencent-tokenhub": "TOKENHUB_API_KEY",
++            }
++            env_var = _SLUG_TO_ENV.get(slug)
++
++        if not env_var:
++            raise HTTPException(
++                status_code=400,
++                detail=f"Cannot determine env var for provider '{slug}' — "
++                       f"configure it via Settings → Environment Variables instead.",
++            )
++
++        # Save the API key
++        save_env_value(env_var, body.api_key)
++        os.environ[env_var] = body.api_key
++
++        # Save base URL if provided
++        if body.base_url and base_url_env_var:
++            save_env_value(base_url_env_var, body.base_url)
++            os.environ[base_url_env_var] = body.base_url
++
++        # Save default model to config.yaml if provided
++        if body.default_model:
++            cfg = load_config()
++            model_cfg = cfg.get("model", {})
++            if isinstance(model_cfg, dict):
++                model_cfg["default"] = body.default_model
++                model_cfg["name"] = body.default_model
++                cfg["model"] = model_cfg
++                save_config(cfg)
++
++        # Look up display name
++        from hermes_cli.models import CANONICAL_PROVIDERS
++        label = slug
++        for cp in CANONICAL_PROVIDERS:
++            if cp.slug == slug:
++                label = cp.label
++                break
++
++        return {
++            "ok": True,
++            "provider_slug": slug,
++            "provider_name": label,
++            "env_var": env_var,
++        }
++    except HTTPException:
++        raise
++    except Exception:
++        _log.exception("POST /api/model/provider/configure failed")
++        raise HTTPException(status_code=500, detail="Internal server error")
++
++
++@app.post("/api/model/fetch-models")
++def fetch_models(body: FetchModelsBody):
++    """Proxy a `/v1/models` request to an external API (avoids CORS in browser).
++
++    Accepts ``base_url`` and optional ``api_key``, calls
++    ``{base_url}/models`` with Bearer auth, and returns the model list.
++    """
++    import httpx
++
++    base_url = body.base_url.rstrip("/")
++    api_key = body.api_key.strip() if body.api_key else ""
++    headers = {"Content-Type": "application/json"}
++    if api_key:
++        headers["Authorization"] = f"Bearer {api_key}"
++
++    try:
++        resp = httpx.get(f"{base_url}/models", headers=headers, timeout=15)
++        resp.raise_for_status()
++        data = resp.json()
++        models = [m["id"] for m in data.get("data", []) if isinstance(m, dict)]
++        return {"models": models}
++    except httpx.HTTPStatusError as e:
++        detail = str(e.response.text[:300]) if e.response.text else str(e)
++        raise HTTPException(status_code=e.response.status_code, detail=detail)
++    except httpx.RequestError as e:
++        raise HTTPException(status_code=502, detail=f"Request failed: {e}")
++    except Exception as e:
++        _log.exception("POST /api/model/fetch-models failed")
++        raise HTTPException(status_code=500, detail=str(e))
++
++
+ @app.get("/api/model/auxiliary")
+ def get_auxiliary_models():
+     """Return current auxiliary task assignments.

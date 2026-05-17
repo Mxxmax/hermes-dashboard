@@ -1,0 +1,38 @@
+diff --git a/cli.py b/cli.py
+index 488d505b7..0aaac66d5 100644
+--- a/cli.py
++++ b/cli.py
+@@ -5859,6 +5859,7 @@ class HermesCLI:
+ 
+     def _prompt_text_input(self, prompt_text: str) -> str | None:
+         """Prompt for free-text input safely inside or outside prompt_toolkit."""
++        import threading as _threading
+         result = [None]
+ 
+         def _ask():
+@@ -5873,7 +5874,24 @@ class HermesCLI:
+             self._status_bar_visible = False
+             self._app.invalidate()
+             try:
+-                run_in_terminal(_ask)
++                _loop = getattr(self._app, 'loop', None)
++                if _loop and _loop.is_running() and _threading.current_thread() is not _threading.main_thread():
++                    # Called from a background thread (e.g. process_loop).
++                    # run_in_terminal requires a running asyncio event loop
++                    # on the current thread — which only exists on the main
++                    # thread.  Schedule the coroutine on the app's loop via
++                    # run_coroutine_threadsafe and block for the result.
++                    import asyncio as _asyncio
++
++                    async def _run_ask():
++                        await run_in_terminal(_ask)
++
++                    _fut = _asyncio.run_coroutine_threadsafe(_run_ask(), _loop)
++                    _fut.result()  # Blocks until the user finishes typing
++                else:
++                    # Main thread, or loop not yet running: run_in_terminal
++                    # works directly because the event loop is right here.
++                    run_in_terminal(_ask)
+             finally:
+                 self._status_bar_visible = was_visible
+                 self._app.invalidate()

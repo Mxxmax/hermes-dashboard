@@ -32,6 +32,11 @@ A standalone web UI that connects to a running Hermes Agent backend API.
 - [Hermes Agent](https://hermes-agent.nousresearch.com) installed and running
 - Node.js 18+
 
+### Backend Patches Required
+
+> **重要：** 前端 SPA 的"添加 API Key"等增强功能需要给 Hermes Agent 后端打补丁。
+> 详见 [`backend/`](./backend/) 目录中的补丁文件和说明。
+
 ### Setup
 
 ```bash
